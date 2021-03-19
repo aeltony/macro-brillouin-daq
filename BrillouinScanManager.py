@@ -20,7 +20,7 @@ import DataFitting
 # different pieces of data?) and sends a signal to the GUI thread for live update.
 
 class ScanManager(QtCore.QThread):
-	motorPosUpdateSig = pyqtSignal(list)
+	motorPosUpdateSig = pyqtSignal(float)
 	clearGUISig = pyqtSignal()
 
 	#TODO: add a pause event
@@ -86,6 +86,10 @@ class ScanManager(QtCore.QThread):
 
 		# Switch to sample arm
 		self.shutter.setShutterState((1, 0))
+		# Capture initial position of motor
+		initialPos = self.motor.updatePosition()
+		# Initialize motor to (relative) start position
+		self.motor.setMotorAsync('moveRelative', [self.scanSettings['start']])
 
 		print("[ScanManager/run] Start")
 
@@ -113,87 +117,63 @@ class ScanManager(QtCore.QThread):
 		for dev in self.sequentialAcqList:
 			dev.unpause()
 
-		frames = self.scanSettings['frames']
 		step = self.scanSettings['step']
+		frames = self.scanSettings['frames']
 		calFreq = self.scanSettings['calFreq']
-		motorCoords = np.empty([frames[0]*frames[1]*frames[2],3]) # Keep track of coordinates
-		calFreqRead = np.empty([frames[1]*frames[2], calFreq.shape[0]]) # Keep track of actual microwave freq
+		motorCoords = np.empty([frames, 1]) # Keep track of actual motor positions
+		calFreqRead = np.empty([calFreq.shape[0], 1]) # Keep track of actual microwave freq
 
-		for i in range(frames[2]):
-			for j in range(frames[1]):
-				for k in range(frames[0]):
-					#print('i,j,k = %d %d %d' % (i,j,k))
-					# Check if scan cancelled
-					if self.Cancel_Flag == True:
-						print('[ScanManager/run] Cancel_Flag! Terminating scan...')
-						# Return to start location
-						self.motor.moveAbs('x', motorCoords[0,0])
-						self.motor.moveAbs('y', motorCoords[0,1])
-						self.motor.moveAbs('z', motorCoords[0,2])
-						for (dev, devProcessor) in zip(self.sequentialAcqList, self.sequentialProcessingList):
-							devProcessor.enqueueData = False
-							dev.runMode = 0
-						# Send signal to clear GUI plots
-						self.clearGUISig.emit()
-						self.maxScanPoints = 400 # Re-scale plot window for free-running mode
-						# Send motor position signal to update GUI
-						motorPos = self.motor.updatePosition()
-						self.motorPosUpdateSig.emit(motorPos)
-						self.Cancel_Flag = False
-						return
+		for i in range(frames):
+			# Check if scan cancelled
+			if self.Cancel_Flag == True:
+				print('[ScanManager/run] Cancel_Flag! Terminating scan...')
+				# Return to initial (pre-scan) position
+				self.motor.moveAbs(initialPos)
+				for (dev, devProcessor) in zip(self.sequentialAcqList, self.sequentialProcessingList):
+					devProcessor.enqueueData = False
+					dev.runMode = 0
+				# Send signal to clear GUI plots
+				self.clearGUISig.emit()
+				self.maxScanPoints = 400 # Re-scale plot window for free-running mode
+				# Send motor position signal to update GUI
+				motorPos = self.motor.updatePosition()
+				self.motorPosUpdateSig.emit(motorPos)
+				self.Cancel_Flag = False
+				return
+			# Signal all devices to start new acquisition
+			for dev in self.sequentialAcqList:
+				dev.continueEvent.set()
+			# Synchronization... wait for all the device threads to complete
+			for dev in self.sequentialAcqList:
+				dev.completeEvent.wait()
+				dev.completeEvent.clear()
+			# Send motor position signal to update GUI
+			motorPos = self.motor.updatePosition()
+			#print('motorPos =', motorPos)
+			motorCoords[i] = motorPos
+			self.motorPosUpdateSig.emit(motorPos)
+			# Move one step forward if not end of line
+			if i < frames-1:
+				self.motor.moveRelative(step)
+			# Otherwise return to intial (pre-scan) position + take calibration data
+			else:
+				self.motor.moveAbs(initialPos)
+				self.shutter.setShutterState((0, 1)) # switch to reference arm
+				self.sequentialAcqList[0].forceSetExposure(self.scanSettings['refExp'])
+				for idx, f in enumerate(calFreq):
+					self.synth.setFreq(f)
+					time.sleep(0.01)
+					calFreqRead[idx] = self.synth.getFreq()
 					# Signal all devices to start new acquisition
 					for dev in self.sequentialAcqList:
 						dev.continueEvent.set()
-					# Synchronization... wait for all the device threads to complete
+					# synchronization... wait for all the device threads to complete
 					for dev in self.sequentialAcqList:
 						dev.completeEvent.wait()
 						dev.completeEvent.clear()
-					# Send motor position signal to update GUI
-					motorPos = self.motor.updatePosition()
-					#print('motorPos =', motorPos)
-					motorCoords[i*frames[1]*frames[0] + j*frames[0] + k] = np.array(motorPos)
-					#motorCoords = np.vstack((motorCoords, np.array(motorPos)))
-					self.motorPosUpdateSig.emit(motorPos)
-					# Move one X step forward/backward if not end of line
-					if k < frames[0]-1:
-						if (i+j)%2 == 0:
-							self.motor.moveRelative('x', step[0])
-							#self.motor.setMotorAsync('moveRelative', 'x', [step[0]])
-						else:
-							self.motor.moveRelative('x', -step[0])
-							#self.motor.setMotorAsync('moveRelative', 'x', [-step[0]])
-					else: # take calibration data at end of line
-						self.shutter.setShutterState((0, 1)) # switch to reference arm
-						self.sequentialAcqList[0].forceSetExposure(self.scanSettings['refExp'])
-						for idx, f in enumerate(calFreq):
-							self.synth.setFreq(f)
-							time.sleep(0.01)
-							calFreqRead[i*frames[1] + j, idx] = self.synth.getFreq()
-							# Signal all devices to start new acquisition
-							for dev in self.sequentialAcqList:
-								dev.continueEvent.set()
-							# synchronization... wait for all the device threads to complete
-							for dev in self.sequentialAcqList:
-								dev.completeEvent.wait()
-								dev.completeEvent.clear()
-						# return to sample arm
-						self.shutter.setShutterState((1, 0))
-						self.sequentialAcqList[0].forceSetExposure(self.scanSettings['sampleExp'])
-				if j < frames[1]-1:
-					if i%2 == 0:
-						self.motor.moveRelative('y', step[1])
-						#self.motor.setMotorAsync('moveRelative', 'y', [step[1]])
-					else:
-						self.motor.moveRelative('y', -step[1])
-						#self.motor.setMotorAsync('moveRelative', 'y', [-step[1]])
-			if i < frames[2]-1:
-				self.motor.moveRelative('z', step[2])
-				#self.motor.setMotorAsync('moveRelative', 'z', [step[2]])
-
-		# Return to start location
-		self.motor.moveAbs('x', motorCoords[0,0])
-		self.motor.moveAbs('y', motorCoords[0,1])
-		self.motor.moveAbs('z', motorCoords[0,2])
+				# return to sample arm
+				self.shutter.setShutterState((1, 0))
+				self.sequentialAcqList[0].forceSetExposure(self.scanSettings['sampleExp'])
 		# Send motor position signal to update GUI
 		motorPos = self.motor.updatePosition()
 		self.motorPosUpdateSig.emit(motorPos)
@@ -209,101 +189,87 @@ class ScanManager(QtCore.QThread):
 		#BS = np.random.random()*(self.colormapHigh - self.colormapLow) + self.colormapLow
 		dataset = {'Andor': [], 'Mako': [], 'TempSensor': []}
 		for (dev, devProcessor) in zip(self.sequentialAcqList, self.sequentialProcessingList):
-			while devProcessor.processedData.qsize() > frames[0]*frames[1]*frames[2] + calFrames*frames[0]*frames[1]:
+			while devProcessor.processedData.qsize() > frames + calFrames:
 				devProcessor.processedData.get() # pop out the first few sets of data stored before scan started
 			while not devProcessor.processedData.empty():
 				data = devProcessor.processedData.get()	# data[0] is a counter
 				dataset[dev.deviceName].append(data[1])
 
-		# Create data arrays
-		RawTempList = np.array(dataset['TempSensor'])
-		CalTempList = np.copy(RawTempList)
+		# Create data arrays for sample and reference frames
+		RawTempList = np.array(dataset['TempSensor'])[:-calFrames]
+		CalTempList = np.array(dataset['TempSensor'])[-calFrames:]
 		imageList = [d[0] for d in dataset['Mako']]
-		CMOSImage = np.array(imageList)
+		CMOSImage = np.array(imageList)[:-calFrames]
 		specImageList = [d[0] for d in dataset['Andor']]
-		AndorImage = np.array(specImageList)
-		CalImage = np.copy(AndorImage)
+		AndorImage = np.array(specImageList)[:-calFrames]
+		CalImage = np.array(specImageList)[-calFrames:]
 		maxRowList = [d[1] for d in dataset['Andor']]
-		RawSpecList = np.array(maxRowList)
-		CalSpecList = np.copy(RawSpecList)
+		RawSpecList = np.array(maxRowList)[:-calFrames]
+		CalSpecList = np.array(maxRowList)[-calFrames:]
 		dispImageList = [d[2] for d in dataset['Andor']]
 		AndorDisplay = np.array(dispImageList)
 		laserPos = np.array([np.float(self.scanSettings['laserX']),np.float(self.scanSettings['laserY'])])
 
-		# Separate sample and reference frames
-		for i in range(calFrames,0,-1):
-			RawTempList = np.delete(RawTempList, np.s_[frames[0]::frames[0]+i], 0)
-			AndorImage = np.delete(AndorImage, np.s_[frames[0]::frames[0]+i], 0)
-			RawSpecList = np.delete(RawSpecList, np.s_[frames[0]::frames[0]+i], 0)
-			CMOSImage = np.delete(CMOSImage, np.s_[frames[0]::frames[0]+i], 0)
-		for i in range(frames[0],0,-1):
-			CalTempList = np.delete(CalTempList, np.s_[::i+calFrames], 0)
-			CalImage = np.delete(CalImage, np.s_[::i+calFrames], 0)
-			CalSpecList = np.delete(CalSpecList, np.s_[::i+calFrames], 0)
-
 		# Save data
-		# volumeScan.generateTestData(k)
-		volumeScan = ScanData(timestamp=datetime.now().strftime('%H:%M:%S'))
-		volumeScan.CalFreq = calFreqRead
-		volumeScan.RawTempList = RawTempList
-		volumeScan.CalTempList = CalTempList
-		volumeScan.AndorImage = AndorImage
-		volumeScan.CalImage = CalImage
-		volumeScan.CMOSImage = CMOSImage
-		volumeScan.RawSpecList = RawSpecList
-		volumeScan.CalSpecList = CalSpecList
-		volumeScan.AndorDisplay = AndorDisplay
-		volumeScan.LaserPos = laserPos
-		volumeScan.MotorCoords = motorCoords
-		volumeScan.Screenshot = self.scanSettings['screenshot']
-		volumeScan.flattenedParamList = self.scanSettings['flattenedParamList']	#save all GUI paramaters
+		# lineScan.generateTestData(k)
+		lineScan = ScanData(timestamp=datetime.now().strftime('%H:%M:%S'))
+		lineScan.CalFreq = calFreqRead
+		lineScan.RawTempList = RawTempList
+		lineScan.CalTempList = CalTempList
+		lineScan.AndorImage = AndorImage
+		lineScan.CalImage = CalImage
+		lineScan.CMOSImage = CMOSImage
+		lineScan.RawSpecList = RawSpecList
+		lineScan.CalSpecList = CalSpecList
+		lineScan.AndorDisplay = AndorDisplay
+		lineScan.LaserPos = laserPos
+		lineScan.MotorCoords = motorCoords
+		lineScan.Screenshot = self.scanSettings['screenshot']
+		lineScan.flattenedParamList = self.scanSettings['flattenedParamList']	#save all GUI paramaters
 
 		#### Fitting Brillouin spectra
 		startTime = timer()
 		freqList = np.zeros(RawSpecList.shape[0])
 		signal = np.zeros(RawSpecList.shape[0])
 		fittedSpect = np.empty(RawSpecList.shape)
-		# Find SD / FSR for every (y, z) coordinate
-		SDcal = np.empty([frames[1]*frames[2]])
-		FSRcal = np.empty([frames[1]*frames[2]])
-		for i in range(frames[1]*frames[2]):
-			pxDist = np.empty(calFreq.shape)
-			for j in range(calFrames):
-				interPeakDist, fittedCalSpect = DataFitting.fitSpectrum(np.copy(CalSpecList[i*calFrames+j]),1e-6,1e-6)
-				if len(interPeakDist)>1:
-					pxDist[j] = interPeakDist[1]
-				else:
-					print("[ScanManager/run] Calibration #%d failed." %j)
-					pxDist[j] = np.nan
+		# Find SD / FSR
+		pxDist = np.empty(calFreq.shape)
+		for j in range(calFrames):
+			interPeakDist, fittedCalSpect = DataFitting.fitSpectrum(np.copy(CalSpecList[j]),1e-6,1e-6)
+			if len(interPeakDist)>1:
+				pxDist[j] = interPeakDist[1]
+			else:
+				print("[ScanManager/run] Calibration frame #%d failed." %j)
+				pxDist[j] = np.nan
 			try:
-				SDcal[i], FSRcal[i] = DataFitting.fitCalCurve(np.copy(pxDist), np.copy(calFreqRead[i]), 1e-6, 1e-6)
-				print('Fitted SD =', SDcal[i])
-				print('Fitted FSR =', FSRcal[i])
+				SDcal, FSRcal = DataFitting.fitCalCurve(np.copy(pxDist), np.copy(calFreqRead[j]), 1e-6, 1e-6)
+				print('Fitted SD =', SDcal)
+				print('Fitted FSR =', FSRcal)
 			except:
-				SDcal[i] = np.nan
-				FSRcal[i] = np.nan
+				SDcal = np.nan
+				FSRcal = np.nan
 
-			for j in range(frames[0]):
-				sline = np.copy(RawSpecList[i*frames[0]+j])
-				sline = np.transpose(sline)
-				interPeakDist, fittedSpect[i*frames[0]+j] = DataFitting.fitSpectrum(sline,1e-6,1e-6)
-				if len(interPeakDist)==2:
-					freqList[i*frames[0]+j] = 0.5*(FSRcal[i] - SDcal[i]*interPeakDist[1])
-					signal[i*frames[0]+j] = interPeakDist[0]
-				else:
-					freqList[i*frames[0]+j] = np.nan
-					signal[i*frames[0]+j] = np.nan
+		for k in range(frames):
+			sline = np.copy(RawSpecList[k])
+			sline = np.transpose(sline)
+			interPeakDist, fittedSpect[k] = DataFitting.fitSpectrum(sline,1e-6,1e-6)
+			if len(interPeakDist)==2:
+				freqList[k] = 0.5*(FSRcal - SDcal*interPeakDist[1])
+				signal[k] = interPeakDist[0]
+			else:
+				freqList[k] = np.nan
+				signal[k] = np.nan
 		# Saved fitted data
-		volumeScan.SD = SDcal
-		volumeScan.FSR = FSRcal
-		volumeScan.BSList = freqList
-		volumeScan.FitSpecList = fittedSpect
+		lineScan.SD = SDcal
+		lineScan.FSR = FSRcal
+		lineScan.BSList = freqList
+		lineScan.FitSpecList = fittedSpect
 
 		endTime = timer()
 		print("[ScanManager] Fitting time = %.3f s" % (endTime - startTime))
 		print('Brillouin frequency shift list:', freqList)
 
-		self.sessionData.experimentList[self.saveExpIndex].addScan(volumeScan)
+		self.sessionData.experimentList[self.saveExpIndex].addScan(lineScan)
 		scanIdx = self.sessionData.experimentList[self.saveExpIndex].size() - 1
 		self.sessionData.saveToFile([(self.saveExpIndex,[scanIdx])])
 

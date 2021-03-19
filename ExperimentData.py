@@ -176,12 +176,12 @@ class ExperimentData:
 
 	def getSD(self, scanIdx):
 		scan = self.scanList[scanIdx]
-		SD = np.nanmean(scan.SD)
+		SD = scan.SD
 		return SD
 
 	def getFSR(self, scanIdx):
 		scan = self.scanList[scanIdx]
-		FSR = np.nanmean(scan.FSR)
+		FSR = scan.FSR
 		return FSR
 
 	# get indices of not deleted scans

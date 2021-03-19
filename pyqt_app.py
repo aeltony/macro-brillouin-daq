@@ -421,7 +421,7 @@ class App(QtGui.QMainWindow,qt_ui.Ui_MainWindow):
         endPos = startPos + stepSize * (frameNum - 1)
         pItem.child('End Position').setValue(endPos)
 
-    @QtCore.pyqtSlot(list)
+    @QtCore.pyqtSlot(float)
     def MotorPositionUpdate2(self, pos):
         #print("[MotorPositionUpdate2]")
         self.allParameters.child('Motor').child('Current Location').setValue(pos)
@@ -455,12 +455,6 @@ class App(QtGui.QMainWindow,qt_ui.Ui_MainWindow):
         channels = 4
         s = pImage.bits().asstring(p.width() * p.height() * channels)
         screenshotArr = np.frombuffer(s, dtype=np.uint8).reshape((p.height(), p.width(), channels))
-        stepSizeArr = np.array([self.allParameters.child('Scan').child('Step Size').child('X').value(), \
-            self.allParameters.child('Scan').child('Step Size').child('Y').value(), \
-            self.allParameters.child('Scan').child('Step Size').child('Z').value()])
-        frameNumArr = np.array([self.allParameters.child('Scan').child('Frame Number').child('X').value(), \
-            self.allParameters.child('Scan').child('Frame Number').child('Y').value(), \
-            self.allParameters.child('Scan').child('Frame Number').child('Z').value()])
         calFreq = np.arange(self.allParameters.child('Microwave Source').child('Cal. Freq (min.)').value(), \
             self.allParameters.child('Microwave Source').child('Cal. Freq (max.)').value() + \
             self.allParameters.child('Microwave Source').child('Cal. Freq (step)').value(), \
@@ -468,8 +462,10 @@ class App(QtGui.QMainWindow,qt_ui.Ui_MainWindow):
 
         flattenedParamList = generateParameterList(self.params, self.allParameters)
 
-        scanSettings = {'step': stepSizeArr,
-            'frames': frameNumArr,
+        scanSettings = {
+            'start': self.allParameters.child('Scan').child('Start Position').value(),
+            'step': self.allParameters.child('Scan').child('Step Size').value(),
+            'frames': self.allParameters.child('Scan').child('Frame Number').value(),
             'calFreq': calFreq,
             'laserX': self.allParameters.child('Scan').child('More Settings').child('Laser Focus X').value(),
             'laserY': self.allParameters.child('Scan').child('More Settings').child('Laser Focus Y').value(),
@@ -480,10 +476,10 @@ class App(QtGui.QMainWindow,qt_ui.Ui_MainWindow):
         self.BrillouinScan.assignScanSettings(scanSettings)
         # Scale plot window to scan length (+ calFreq calibration frames per y-z coordinate)
         self.calPoints = calFreq.shape[0]
-        self.maxScanPoints = frameNumArr[0]*frameNumArr[1]*frameNumArr[2] + self.calPoints*frameNumArr[1]*frameNumArr[2]
+        self.maxScanPoints = scanSettings['frames'] + self.calPoints
         self.sampleSpecSeriesSize = self.maxScanPoints # Prevent indexing error before scan starts
-        self.maxRowPoints = frameNumArr[0] + self.calPoints
-        self.maxColPoints = frameNumArr[1]
+        self.maxRowPoints = scanSettings['frames']
+        self.maxColPoints = int(round(self.maxScanPoints/self.maxRowPoints))
         self.heatmapPlot.setXRange(0, self.maxRowPoints)
         self.heatmapPlot.setYRange(0, self.maxColPoints)
 
