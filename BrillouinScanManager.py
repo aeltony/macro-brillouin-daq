@@ -120,8 +120,8 @@ class ScanManager(QtCore.QThread):
 		step = self.scanSettings['step']
 		frames = self.scanSettings['frames']
 		calFreq = self.scanSettings['calFreq']
-		motorCoords = np.empty([frames, 1]) # Keep track of actual motor positions
-		calFreqRead = np.empty([calFreq.shape[0], 1]) # Keep track of actual microwave freq
+		motorCoords = np.empty([frames]) # Keep track of actual motor positions
+		calFreqRead = np.empty([calFreq.shape[0]]) # Keep track of actual microwave freq
 
 		for i in range(frames):
 			# Check if scan cancelled
@@ -231,24 +231,28 @@ class ScanManager(QtCore.QThread):
 		startTime = timer()
 		freqList = np.zeros(RawSpecList.shape[0])
 		signal = np.zeros(RawSpecList.shape[0])
-		fittedSpect = np.empty(RawSpecList.shape)
+		fittedSpect = np.zeros(RawSpecList.shape)
 		# Find SD / FSR
-		pxDist = np.empty(calFreq.shape)
+		pxDist = np.zeros(calFreq.shape)
 		for j in range(calFrames):
 			interPeakDist, fittedCalSpect = DataFitting.fitSpectrum(np.copy(CalSpecList[j]),1e-6,1e-6)
 			if len(interPeakDist)>1:
 				pxDist[j] = interPeakDist[1]
+				print('pxDist =', pxDist[j])
 			else:
 				print("[ScanManager/run] Calibration frame #%d failed." %j)
 				pxDist[j] = np.nan
-			try:
-				SDcal, FSRcal = DataFitting.fitCalCurve(np.copy(pxDist), np.copy(calFreqRead[j]), 1e-6, 1e-6)
-				print('Fitted SD =', SDcal)
-				print('Fitted FSR =', FSRcal)
-			except:
-				SDcal = np.nan
-				FSRcal = np.nan
+		print('pxDist =', pxDist)
+		print('calFreqRead =', calFreqRead)
+		try:
+			SDcal, FSRcal = DataFitting.fitCalCurve(np.copy(pxDist), np.copy(calFreqRead), 1e-6, 1e-6)
+			print('Fitted SD =', SDcal)
+			print('Fitted FSR =', FSRcal)
+		except:
+			SDcal = np.nan
+			FSRcal = np.nan
 
+		# Use SD/FSR to determine Brillouin shift values
 		for k in range(frames):
 			sline = np.copy(RawSpecList[k])
 			sline = np.transpose(sline)

@@ -87,9 +87,9 @@ class App(QtGui.QMainWindow,qt_ui.Ui_MainWindow):
             ]},
             {'name': 'Motor', 'type': 'group', 'children': [
                 {'name': 'Current Location', 'type': 'float', 'value':0, 'suffix':' um', 'readonly': True, 'decimals':5},
-                {'name': 'Jog Step', 'type': 'float', 'value': 10, 'suffix':' um', 'step': 1, 'limits':(0, 5000)},
+                {'name': 'Jog Step', 'type': 'float', 'value': 10, 'suffix':' um', 'step': 1, 'limits':(0, 10000)},
                 {'name': 'Jog Z', 'type': 'action3', 'ButtonText':('Jog Z +', 'Jog Z -', 'Home Z')},
-                {'name': 'Move to Location', 'type': 'float', 'value':0, 'suffix':' um', 'limits':(0, 5000), 'decimals':5},
+                {'name': 'Move to Location', 'type': 'float', 'value':0, 'suffix':' um', 'limits':(0, 25400), 'decimals':5},
                 {'name': 'Move', 'type':'action', 'ButtonText':('Move')}
             ]},
             {'name': 'Microwave Source', 'type': 'group', 'children': [
@@ -479,7 +479,7 @@ class App(QtGui.QMainWindow,qt_ui.Ui_MainWindow):
         self.maxScanPoints = scanSettings['frames'] + self.calPoints
         self.sampleSpecSeriesSize = self.maxScanPoints # Prevent indexing error before scan starts
         self.maxRowPoints = scanSettings['frames']
-        self.maxColPoints = int(round(self.maxScanPoints/self.maxRowPoints))
+        self.maxColPoints = int(1 + np.ceil(self.calPoints/self.maxRowPoints))
         self.heatmapPlot.setXRange(0, self.maxRowPoints)
         self.heatmapPlot.setYRange(0, self.maxColPoints)
 
@@ -573,7 +573,6 @@ class App(QtGui.QMainWindow,qt_ui.Ui_MainWindow):
         heatmapSeq = np.pad(self.heatmapScanData, (0, self.maxRowPoints*self.maxColPoints - self.heatmapScanData.shape[0]), 'constant')
         heatmapSeq[np.isnan(heatmapSeq)] = 0 #Remove NaNs
         heatmapArr = np.reshape(heatmapSeq, (-1, self.maxRowPoints))   # self.maxRowPoints columns
-        heatmapArr[1::2, :-self.calPoints] = np.fliplr(heatmapArr[1::2, :-self.calPoints]) # Match S-shaped line scan pattern
         heatmapArr = np.rot90(heatmapArr, 1, (1,0)) # Rotate to match XY axes
         colormapLow = self.allParameters.child('Display').child('Colormap (min.)').value()
         colormapHigh = self.allParameters.child('Display').child('Colormap (max.)').value()
