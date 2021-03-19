@@ -100,13 +100,14 @@ class App(QtGui.QMainWindow,qt_ui.Ui_MainWindow):
                 {'name': 'Cal. Freq (step)', 'type': 'float', 'value': 0.01, 'suffix':' GHz', 'step': 0.01, 'limits': (0.05, 13.0), 'decimals':3}
             ]},
             {'name': 'Spectrometer Camera', 'type': 'group', 'children': [
-                {'name': 'AutoExposure', 'type':'toggle', 'ButtonText':('Auto exposure', 'Fixed exposure')},         #False=Fixed exposure
-                {'name': 'Camera Temp.', 'type': 'float', 'value':0, 'suffix':' C', 'readonly': True},
+                {'name': 'Background Subtraction', 'type':'toggle', 'ButtonText':('Turn on background subtraction', 'Turn off background subtraction')},
                 {'name': 'Exposure', 'type':'float', 'value':0.2, 'suffix':' s', 'step':0.05, 'limits':(0.01, 10)},
                 {'name': 'Ref. Exposure', 'type':'float', 'value':0.1, 'suffix':' s', 'step':0.05, 'limits':(0.01, 10)},
+                {'name': 'AutoExposure', 'type':'toggle', 'ButtonText':('Auto exposure', 'Fixed exposure')},         #False=Fixed exposure
                 {'name': 'Sample Column', 'type':'int', 'value': sampleSpectCenter, 'suffix':' px', 'step':1, 'limits':(0, 2048)},
-                {'name': 'Sample Row', 'type':'int', 'value': sampleSlineIdx, 'suffix':' px', 'step':1, 'limits':(0, 2048)}
-            ]},        
+                {'name': 'Sample Row', 'type':'int', 'value': sampleSlineIdx, 'suffix':' px', 'step':1, 'limits':(0, 2048)},
+                {'name': 'Camera Temp.', 'type': 'float', 'value':0, 'suffix':' C', 'readonly': True}
+            ]},
             {'name': 'Microscope Camera', 'type': 'group', 'children': [
                 {'name': 'Exposure Time', 'type': 'float', 'value': 200, 'suffix':' ms', 'limits':(0.001, 10000)},
                 {'name': 'Frame Rate', 'type': 'int', 'value': 5, 'suffix':' Hz', 'limits':(1, 20)}
@@ -249,7 +250,7 @@ class App(QtGui.QMainWindow,qt_ui.Ui_MainWindow):
 
         # sampleScanDepthPlot is the Brillouin vs z axis plot
         self.sampleScanDepthPlot = pg.PlotItem()
-        self.sampleScanDepthPlot.setYRange(5,6)
+        self.sampleScanDepthPlot.setYRange(5,10)
         self.graphicsViewSampleScanDepth.setCentralItem(self.sampleScanDepthPlot)
         self.sampleScanDepthPlot.enableAutoRange(axis=self.sampleScanDepthPlot.vb.XAxis, enable=True)
         self.sampleScanDepthItem = pg.PlotDataItem() 
@@ -330,11 +331,12 @@ class App(QtGui.QMainWindow,qt_ui.Ui_MainWindow):
 
         # ========================= Spectrometer Camera ================================
         pItem = self.allParameters.child('Spectrometer Camera')
-        pItem.child('AutoExposure').sigActivated.connect(self.switchAutoExp)
+        pItem.child('Background Subtraction').sigActivated.connect(self.bgSubtraction)
         pItem.child('Camera Temp.').setValue(self.AndorDeviceThread.getTemperature())
         pItem.child('Exposure').sigValueChanged.connect(
             lambda data: self.changeHardwareSetting(data, self.AndorDeviceThread.setExposure))
         pItem.child('Exposure').setValue(self.AndorDeviceThread.getExposure())
+        pItem.child('AutoExposure').sigActivated.connect(self.switchAutoExp)
 
         # ========================= Monitor Camera ================================
         pItem = self.allParameters.child('Microscope Camera')
@@ -535,6 +537,14 @@ class App(QtGui.QMainWindow,qt_ui.Ui_MainWindow):
         else:
             self.ShutterDevice.setShutterState(self.ShutterDevice.SAMPLE_STATE)
             self.AndorDeviceThread.setExposure(self.allParameters.child('Spectrometer Camera').child('Exposure').value())
+
+    def bgSubtraction(self, sliderParam, state):
+        if state:
+            self.AndorDeviceThread.startBGsubtraction()
+            print("Spectrometer background subtraction ON")
+        else:
+            self.AndorDeviceThread.stopBGsubtraction()
+            print("Spectrometer background subtraction OFF")
 
     def switchAutoExp(self, sliderParam, state):
         if state:

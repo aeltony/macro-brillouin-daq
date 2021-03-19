@@ -12,7 +12,7 @@ from scipy.ndimage.filters import gaussian_filter
 # ftol and xtol are fitting tolerances (adjust for speed vs. accuracy)
 def fitSpectrum(sline, xtol=1e-6, ftol=1e-6, maxfev=500):
 	start = timer()
-	weights = np.sqrt(sline)  # Weight data by SNR
+	weights = np.sqrt(np.abs(sline))  # Weight data by SNR
 
 	# Find peak locations:
 	prominence = 0.05*np.amax(sline)
