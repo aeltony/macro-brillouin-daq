@@ -12,15 +12,18 @@ from scipy.ndimage.filters import gaussian_filter
 # ftol and xtol are fitting tolerances (adjust for speed vs. accuracy)
 def fitSpectrum(sline, xtol=1e-6, ftol=1e-6, maxfev=500):
 	start = timer()
-	weights = np.sqrt(np.abs(sline))  # Weight data by SNR
+	posSline = np.abs(sline)
+	weights = np.sqrt(posSline)  # Weight data by SNR
 
 	# Find peak locations:
-	prominence = 0.05*np.amax(sline)
+	prominence = 0.05*np.amax(posSline)
+	wlen = 5*prominence
 	pk_ind, pk_info = find_peaks(sline, prominence=prominence, width=2, \
-		height=100, rel_height=0.5, wlen=0.25*np.amax(sline))
+		height=100, rel_height=0.5, wlen=wlen)
 	pk_wids = 0.5*pk_info['widths']
 	pk_hts = np.pi*pk_wids*pk_info['peak_heights']
-	
+	#print("pk_ind = ", pk_ind)
+
 	# Check for extra peaks from adjacent orders:
 	if len(pk_ind)>2:
 		pk_srt = np.argsort(pk_hts)
@@ -40,6 +43,8 @@ def fitSpectrum(sline, xtol=1e-6, ftol=1e-6, maxfev=500):
 		interPeaksteps = np.array([])
 		fittedSpect = np.nan*np.ones(sline.shape)
 		return (interPeaksteps, fittedSpect)
+
+	#print("filtered pk_ind =", pk_ind)
 
 	# Starting guesses for fit:
 	p0 = [pk_hts[0], pk_ind[0], pk_wids[0], pk_hts[1], pk_ind[1], pk_wids[1], np.amin(sline)]
@@ -68,7 +73,8 @@ def fitSpectrum(sline, xtol=1e-6, ftol=1e-6, maxfev=500):
 		#perr = np.sqrt(np.diag(pcov))
 		interPeaksteps = np.zeros(2)
 		interPeaksteps[0] = np.array([np.average(pk_info['peak_heights'])])
-		interPeaksteps[1] = popt[4] - popt[1]
+		interPeaksteps[1] = np.abs(popt[4] - popt[1])
+		#print('interPeaksteps[1] =', interPeaksteps[1])
 		fittedSpect = _2Lorentzian(pix, popt[0], popt[1], popt[2], popt[3], popt[4], popt[5], popt[6])
 	except:
 		#print('[AndorDevice] Fitting spectrum failed')
