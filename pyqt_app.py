@@ -533,9 +533,11 @@ class App(QtGui.QMainWindow,qt_ui.Ui_MainWindow):
         # state == False --> Sample
         if state:
             self.ShutterDevice.setShutterState(self.ShutterDevice.REFERENCE_STATE)
+            self.AndorDeviceThread.pauseBGsubtraction(True)
             self.AndorDeviceThread.setExposure(self.allParameters.child('Spectrometer Camera').child('Ref. Exposure').value())
         else:
             self.ShutterDevice.setShutterState(self.ShutterDevice.SAMPLE_STATE)
+            self.AndorDeviceThread.pauseBGsubtraction(False)
             self.AndorDeviceThread.setExposure(self.allParameters.child('Spectrometer Camera').child('Exposure').value())
 
     def bgSubtraction(self, sliderParam, state):

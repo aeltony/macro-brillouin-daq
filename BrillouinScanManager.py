@@ -86,6 +86,8 @@ class ScanManager(QtCore.QThread):
 
 		# Switch to sample arm
 		self.shutter.setShutterState((1, 0))
+		self.sequentialAcqList[0].forceSetExposure(self.scanSettings['sampleExp'])
+		self.sequentialAcqList[0].pauseBGsubtraction(False)
 		# Capture initial position of motor
 		initialPos = self.motor.updatePosition()
 		# Initialize motor to (relative) start position
@@ -160,6 +162,7 @@ class ScanManager(QtCore.QThread):
 				self.motor.moveAbs(initialPos)
 				self.shutter.setShutterState((0, 1)) # switch to reference arm
 				self.sequentialAcqList[0].forceSetExposure(self.scanSettings['refExp'])
+				self.sequentialAcqList[0].pauseBGsubtraction(True)
 				for idx, f in enumerate(calFreq):
 					self.synth.setFreq(f)
 					time.sleep(0.01)
@@ -174,6 +177,7 @@ class ScanManager(QtCore.QThread):
 				# return to sample arm
 				self.shutter.setShutterState((1, 0))
 				self.sequentialAcqList[0].forceSetExposure(self.scanSettings['sampleExp'])
+				self.sequentialAcqList[0].pauseBGsubtraction(False)
 		# Send motor position signal to update GUI
 		motorPos = self.motor.updatePosition()
 		self.motorPosUpdateSig.emit(motorPos)
@@ -183,7 +187,7 @@ class ScanManager(QtCore.QThread):
 			while devProcessor.isIdle == False:
 				time.sleep(0.1)
 
-		print('calFreqRead =', calFreqRead)
+		#print('calFreqRead =', calFreqRead)
 		# Process Data
 		calFrames = calFreq.shape[0]
 		#BS = np.random.random()*(self.colormapHigh - self.colormapLow) + self.colormapLow
@@ -238,12 +242,12 @@ class ScanManager(QtCore.QThread):
 			interPeakDist, fittedCalSpect = DataFitting.fitSpectrum(np.copy(CalSpecList[j]),1e-6,1e-6)
 			if len(interPeakDist)>1:
 				pxDist[j] = interPeakDist[1]
-				print('pxDist =', pxDist[j])
+				#print('pxDist =', pxDist[j])
 			else:
 				print("[ScanManager/run] Calibration frame #%d failed." %j)
 				pxDist[j] = np.nan
-		print('pxDist =', pxDist)
-		print('calFreqRead =', calFreqRead)
+		#print('pxDist =', pxDist)
+		#print('calFreqRead =', calFreqRead)
 		try:
 			SDcal, FSRcal = DataFitting.fitCalCurve(np.copy(pxDist), np.copy(calFreqRead), 1e-6, 1e-6)
 			print('Fitted SD =', SDcal)

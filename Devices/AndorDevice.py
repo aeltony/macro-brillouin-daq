@@ -32,6 +32,7 @@ class AndorDevice(Devices.BrillouinDevice.Device):
 
         self.autoExp = False
         self.bgSubtraction = False
+        self.pauseBG = False
         self.triggerBG = False
 
     # set up default parameters
@@ -66,6 +67,10 @@ class AndorDevice(Devices.BrillouinDevice.Device):
     def stopBGsubtraction(self):
         self.bgSubtraction = False
 
+    def pauseBGsubtraction(self, pauseStatus):
+        self.pauseBG = pauseStatus
+        print('Background subtraction pause status =', pauseStatus)
+
     # getData() acquires an image from Andor
     def getData(self):
         if self.triggerBG:
@@ -82,7 +87,7 @@ class AndorDevice(Devices.BrillouinDevice.Device):
             imageSize = int(self.cam.GetAcquiredDataDim())
             # return a copy of the data, since the buffer is reused for next frame
             im_arr = np.array(self.imageBuffer[0:imageSize], copy=True, dtype = np.uint16)
-            if self.bgSubtraction:
+            if self.bgSubtraction and not self.pauseBG:
                 im_arr = im_arr - self.bgImage
         return (im_arr, expTime)
 
