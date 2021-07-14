@@ -21,14 +21,14 @@ class MakoDevice(Devices.BrillouinDevice.Device):
         self.set_up()
         self.mako_lock = app.mako_lock
         self.runMode = 0    #0 is free running, 1 is scan
-        self.camera.ExposureTimeAbs = 20000    # us??
+        self.camera.ExposureTimeAbs = 5000    # us
         self.imageHeight = 1000
         self.imageWidth = 1000
         self.bin_size = 2
         self.camera.Height = self.imageHeight # max: 2048
         self.camera.Width = self.imageWidth # max: 2048
-        self.camera.OffsetX = 320
-        self.camera.OffsetY = 600
+        self.camera.OffsetX = 524
+        self.camera.OffsetY = 524
         self.camera.startCapture()
         self.camera.runFeatureCommand('AcquisitionStart')
         self.frame.queueFrameCapture()
@@ -75,7 +75,7 @@ class MakoDevice(Devices.BrillouinDevice.Device):
     # getData() acquires an image from Mako
     def getData(self):
         with self.mako_lock:
-            self.frame.waitFrameCapture(1000)
+            self.frame.waitFrameCapture(100000)
             self.frame.queueFrameCapture()
             imgData = self.frame.getBufferByteData()
             image_arr = np.ndarray(buffer = imgData,
@@ -91,14 +91,14 @@ class MakoDevice(Devices.BrillouinDevice.Device):
         with self.mako_lock:
             self.camera.ExposureTimeAbs = expTime*1e3
         #self.changeSetting(self.mako_lock, lambda:self.camera.ExposureTimeAbs.SetValue(expTime*1e6))
-        print("[MakoDevice] Exposure time set to %.3f ms" % expTime)
+        #print("[MakoDevice] Exposure time set to %.3f ms" % expTime)
 
     def setFrameRate(self, frameRate):
         #print('[MakoDevice] setFrameRate got called with value=', frameRate)
         with self.mako_lock:
             self.camera.AcquisitionFrameRateAbs = frameRate
         #self.changeSetting(self.mako_lock, lambda:self.camera.AcquisitionFrameRateAbs.SetValue(frameRate))
-        print("[MakoDevice] Frame rate set to %.3f Hz" % frameRate)
+        #print("[MakoDevice] Frame rate set to %.3f Hz" % frameRate)
 
 # This class does the computation for free running mode, mostly displaying
 # to the GUI

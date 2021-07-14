@@ -33,7 +33,7 @@ class TempSensorDevice(Devices.BrillouinDevice.Device):
     def set_up(self):
         # Allocate a new Phidget Channel object
         self.ch = TemperatureSensor()
-        self.ch.setDeviceSerialNumber(562607) # VINT Hub serial number
+        self.ch.setDeviceSerialNumber(562627) # VINT Hub serial number
         self.ch.setHubPort(0) # Port RTD Phidget is connected to
         self.ch.setIsHubPortDevice(0) # Not a networked device
         self.ch.setChannel(0) # Channel 0 = temperature sensor

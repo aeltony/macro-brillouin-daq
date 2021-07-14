@@ -29,22 +29,18 @@ class ScanManager(QtCore.QThread):
         # TODO: change to dictionary
 		self.sequentialAcqList = []
 		self.sequentialProcessingList = []
-		self.freerunningList = []
 		self.stop_event = stop_event
 
 		self.motor = motor
 		self.shutter = shutter
 		self.synth = synth
 
-		self.processor = None
-
-		self.saveScan = True
 		self.sessionData = None
 		self.saveExpIndex = -1	# this is the expScanIndices argument in the Session.saveToFile() method
-
 		self.scanSettings = None
 		self.Cancel_Flag = False
-
+		self.SDcal = np.nan
+		self.FSRcal = np.nan
 
 	# TODO: add a lock for accessing these variables
 	def assignScanSettings(self, settings):
@@ -56,13 +52,6 @@ class ScanManager(QtCore.QThread):
 	def addToSequentialList(self, deviceThread, processingThread):
 		self.sequentialAcqList.append(deviceThread)
 		self.sequentialProcessingList.append(processingThread)
-
-	def addToFreerunningList(self, deviceThread):
-		self.freerunningList.append(deviceThread)
-
-	# processor is a method that takes a list of Brillouin shifts and other arguments as needed
-	def addDataProcessor(self, processor):
-		self.processor = processor
 
   	# In a sequential scan, the following sequence must be followed
   	#	dev.doSomethingStart()
@@ -76,18 +65,17 @@ class ScanManager(QtCore.QThread):
 		self.setPriority(QtCore.QThread.TimeCriticalPriority)
 
 		# make sure saving settings are ok
-		if self.saveScan:
-			if self.sessionData is None:
-				print("No Session provided to save data in; set ScanManager.sessionData first")
-				return
-			if self.saveExpIndex == -1:
-				print("Save parameter is empty; set ScanManager.saveParameter first")
-				return
+		if self.sessionData is None:
+			print("No Session provided to save data in; set ScanManager.sessionData first")
+			return
+		if self.saveExpIndex == -1:
+			print("Save parameter is empty; set ScanManager.saveParameter first")
+			return
 
 		# Switch to sample arm
 		self.shutter.setShutterState((1, 0))
 		self.sequentialAcqList[0].forceSetExposure(self.scanSettings['sampleExp'])
-		self.sequentialAcqList[0].pauseBGsubtraction(False)
+		self.sequentialAcqList[0].setRefState(False)
 		# Capture initial position of motor
 		initialPos = self.motor.updatePosition()
 		# Initialize motor to (relative) start position
@@ -130,17 +118,24 @@ class ScanManager(QtCore.QThread):
 			if self.Cancel_Flag == True:
 				print('[ScanManager/run] Cancel_Flag! Terminating scan...')
 				# Return to initial (pre-scan) position
-				self.motor.moveAbs(initialPos)
+				if step > 0:
+					self.motor.moveAbs(initialPos)
+				# Stop acquiring data
 				for (dev, devProcessor) in zip(self.sequentialAcqList, self.sequentialProcessingList):
 					devProcessor.enqueueData = False
 					dev.runMode = 0
+				# Wait for all processing threads to complete + empty the data queues (free up working memory)
+				for devProcessor in self.sequentialProcessingList:
+					while devProcessor.isIdle == False:
+						time.sleep(0.1)
+					while not devProcessor.processedData.empty():
+						devProcessor.processedData.get()
 				# Send signal to clear GUI plots
 				self.clearGUISig.emit()
 				self.maxScanPoints = 400 # Re-scale plot window for free-running mode
 				# Send motor position signal to update GUI
 				motorPos = self.motor.updatePosition()
 				self.motorPosUpdateSig.emit(motorPos)
-				self.Cancel_Flag = False
 				return
 			# Signal all devices to start new acquisition
 			for dev in self.sequentialAcqList:
@@ -156,13 +151,13 @@ class ScanManager(QtCore.QThread):
 			self.motorPosUpdateSig.emit(motorPos)
 			# Move one step forward if not end of line
 			if i < frames-1:
-				self.motor.moveRelative(step)
-			# Otherwise return to intial (pre-scan) position + take calibration data
+				if step > 0:
+					self.motor.moveRelative(step)
+			# Otherwise, take calibration data
 			else:
-				self.motor.moveAbs(initialPos)
 				self.shutter.setShutterState((0, 1)) # switch to reference arm
 				self.sequentialAcqList[0].forceSetExposure(self.scanSettings['refExp'])
-				self.sequentialAcqList[0].pauseBGsubtraction(True)
+				self.sequentialAcqList[0].setRefState(True)
 				for idx, f in enumerate(calFreq):
 					self.synth.setFreq(f)
 					time.sleep(0.01)
@@ -177,7 +172,10 @@ class ScanManager(QtCore.QThread):
 				# return to sample arm
 				self.shutter.setShutterState((1, 0))
 				self.sequentialAcqList[0].forceSetExposure(self.scanSettings['sampleExp'])
-				self.sequentialAcqList[0].pauseBGsubtraction(False)
+				self.sequentialAcqList[0].setRefState(False)
+		# Return to start location
+		if step > 0:
+			self.motor.moveAbs(initialPos)
 		# Send motor position signal to update GUI
 		motorPos = self.motor.updatePosition()
 		self.motorPosUpdateSig.emit(motorPos)
@@ -187,10 +185,8 @@ class ScanManager(QtCore.QThread):
 			while devProcessor.isIdle == False:
 				time.sleep(0.1)
 
-		#print('calFreqRead =', calFreqRead)
 		# Process Data
 		calFrames = calFreq.shape[0]
-		#BS = np.random.random()*(self.colormapHigh - self.colormapLow) + self.colormapLow
 		dataset = {'Andor': [], 'Mako': [], 'TempSensor': []}
 		for (dev, devProcessor) in zip(self.sequentialAcqList, self.sequentialProcessingList):
 			while devProcessor.processedData.qsize() > frames + calFrames:
@@ -199,83 +195,32 @@ class ScanManager(QtCore.QThread):
 				data = devProcessor.processedData.get()	# data[0] is a counter
 				dataset[dev.deviceName].append(data[1])
 
-		# Create data arrays for sample and reference frames
-		RawTempList = np.array(dataset['TempSensor'])[:-calFrames]
-		CalTempList = np.array(dataset['TempSensor'])[-calFrames:]
-		imageList = [d[0] for d in dataset['Mako']]
-		CMOSImage = np.array(imageList)[:-calFrames]
-		specImageList = [d[0] for d in dataset['Andor']]
-		AndorImage = np.array(specImageList)[:-calFrames]
-		CalImage = np.array(specImageList)[-calFrames:]
-		maxRowList = [d[1] for d in dataset['Andor']]
-		RawSpecList = np.array(maxRowList)[:-calFrames]
-		CalSpecList = np.array(maxRowList)[-calFrames:]
-		dispImageList = [d[2] for d in dataset['Andor']]
-		AndorDisplay = np.array(dispImageList)
-		laserPos = np.array([np.float(self.scanSettings['laserX']),np.float(self.scanSettings['laserY'])])
-
-		# Save data
+		# Make data arrays
 		# lineScan.generateTestData(k)
 		lineScan = ScanData(timestamp=datetime.now().strftime('%H:%M:%S'))
 		lineScan.CalFreq = calFreqRead
-		lineScan.RawTempList = RawTempList
-		lineScan.CalTempList = CalTempList
-		lineScan.AndorImage = AndorImage
-		lineScan.CalImage = CalImage
-		lineScan.CMOSImage = CMOSImage
-		lineScan.RawSpecList = RawSpecList
-		lineScan.CalSpecList = CalSpecList
-		lineScan.AndorDisplay = AndorDisplay
-		lineScan.LaserPos = laserPos
+		lineScan.TempList = np.array(dataset['TempSensor'])
+		lineScan.CMOSImage = np.array(dataset['Mako'])
+		lineScan.AndorImage = np.array([d[0] for d in dataset['Andor']])
+		lineScan.SpecList = np.array([d[1] for d in dataset['Andor']])
+		calPeakDist = np.array([d[2] for d in dataset['Andor']])[-calFrames:]
+		# Free up memory used by dataset
+		del dataset
 		lineScan.MotorCoords = motorCoords
 		lineScan.Screenshot = self.scanSettings['screenshot']
 		lineScan.flattenedParamList = self.scanSettings['flattenedParamList']	#save all GUI paramaters
 
-		#### Fitting Brillouin spectra
-		startTime = timer()
-		freqList = np.zeros(RawSpecList.shape[0])
-		signal = np.zeros(RawSpecList.shape[0])
-		fittedSpect = np.zeros(RawSpecList.shape)
-		# Find SD / FSR
-		pxDist = np.zeros(calFreq.shape)
-		for j in range(calFrames):
-			interPeakDist, fittedCalSpect = DataFitting.fitSpectrum(np.copy(CalSpecList[j]),1e-6,1e-6)
-			if len(interPeakDist)>1:
-				pxDist[j] = interPeakDist[1]
-				#print('pxDist =', pxDist[j])
-			else:
-				print("[ScanManager/run] Calibration frame #%d failed." %j)
-				pxDist[j] = np.nan
-		#print('pxDist =', pxDist)
-		#print('calFreqRead =', calFreqRead)
+		# Find SD / FSR of final calibration curve
 		try:
-			SDcal, FSRcal = DataFitting.fitCalCurve(np.copy(pxDist), np.copy(calFreqRead), 1e-6, 1e-6)
-			print('Fitted SD =', SDcal)
-			print('Fitted FSR =', FSRcal)
+			self.SDcal, self.FSRcal = DataFitting.fitCalCurve(np.copy(calPeakDist), np.copy(calFreqRead), 1e-6, 1e-6)
+			print('[ScanManager] Fitted SD = %.3f GHz/px' % self.SDcal)
+			print('[ScanManager] Fitted FSR = %.2f GHz' % self.FSRcal)
 		except:
-			SDcal = np.nan
-			FSRcal = np.nan
-
-		# Use SD/FSR to determine Brillouin shift values
-		for k in range(frames):
-			sline = np.copy(RawSpecList[k])
-			sline = np.transpose(sline)
-			interPeakDist, fittedSpect[k] = DataFitting.fitSpectrum(sline,1e-6,1e-6)
-			if len(interPeakDist)==2:
-				freqList[k] = 0.5*(FSRcal - SDcal*interPeakDist[1])
-				signal[k] = interPeakDist[0]
-			else:
-				freqList[k] = np.nan
-				signal[k] = np.nan
-		# Saved fitted data
-		lineScan.SD = SDcal
-		lineScan.FSR = FSRcal
-		lineScan.BSList = freqList
-		lineScan.FitSpecList = fittedSpect
-
-		endTime = timer()
-		print("[ScanManager] Fitting time = %.3f s" % (endTime - startTime))
-		print('Brillouin frequency shift list:', freqList)
+			self.SDcal = np.nan
+			self.FSRcal = np.nan
+		# Saved fitted SD/FSR
+		lineScan.SD = self.SDcal
+		lineScan.FSR = self.FSRcal
 
 		self.sessionData.experimentList[self.saveExpIndex].addScan(lineScan)
 		scanIdx = self.sessionData.experimentList[self.saveExpIndex].size() - 1

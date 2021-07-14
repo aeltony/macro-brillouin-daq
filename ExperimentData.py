@@ -72,7 +72,6 @@ class SessionData(QtCore.QObject):
 	def addNewExperiment(self, filename = None):
 		newExp = ExperimentData("New Experiment")
 		self.addExperiment(newExp)
-
 		if filename is not None:
 			self.saveToFile([(newExp.index,[])], filename = filename )
 		elif self.filename is not None:
@@ -100,8 +99,6 @@ class SessionData(QtCore.QObject):
 		else:
 			print("[SessionData/saveToFile] filename not provided")
 			return
-		# print filename
-		print("Session File Save: " + filename)
 		with h5py.File(filename, 'a') as fHandle:
 			if updateFieldOnly:	#TODO: throw errors when the field path is invalid
 				pathElements = fieldPath.split('/')
@@ -134,7 +131,6 @@ class SessionData(QtCore.QObject):
 				if hasattr(self, data):
 					# first check if file already has this dataset
 					datasetName = data
-					# print('Saving session: ' + datasetName)
 					if datasetName in fHandle:	# delete if already exist
 						del fHandle[datasetName]
 					fHandle.create_dataset(datasetName, data=self.__dict__[data])
@@ -164,37 +160,17 @@ class ExperimentData:
 		self.parent = parent
 		self.deleted = False		# data is never completely deleted, only flagged
 
-	# returns (BS)
-	def getBS(self, noDeleted = True):
-		BSList = []
-		for scan in self.scanList:
-			if scan.deleted:
-				continue
-			BS = scan.BS
-			BSList.append(BS)
-		return BSList
-
-	def getSD(self, scanIdx):
-		scan = self.scanList[scanIdx]
-		SD = scan.SD
-		return SD
-
-	def getFSR(self, scanIdx):
-		scan = self.scanList[scanIdx]
-		FSR = scan.FSR
-		return FSR
-
 	# get indices of not deleted scans
-	def getActiveScanIndices(self):
-		scanIndexList = []
-		idx = 0
-		for scan in self.scanList:
-			if scan.deleted:
-				idx += 1
-				continue
-			scanIndexList.append(idx)
-			idx += 1
-		return scanIndexList
+	#def getActiveScanIndices(self):
+	#	scanIndexList = []
+	#	idx = 0
+	#	for scan in self.scanList:
+	#		if scan.deleted:
+	#			idx += 1
+	#			continue
+	#		scanIndexList.append(idx)
+	#		idx += 1
+	#	return scanIndexList
 
 	def size(self):
 		return len(self.scanList)
@@ -212,7 +188,7 @@ class ExperimentData:
 		self.note = note
 
 	def getGroupName(self):
-		return 'Exp_' + str(self.index)	
+		return 'Exp_' + str(self.index)
 
 	# def generateTestData(self):
 	# 	self.timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -238,15 +214,14 @@ class ExperimentData:
 			if hasattr(self, data):
 				# first check if file already has this dataset
 				datasetName = datasetPath + data
-				# print('Saving experiment: ' + datasetName)
 				if datasetName in fHandle:	# delete if already exist
 					del fHandle[datasetName]
 				fHandle.create_dataset(datasetName, data=self.__dict__[data])
 
 		gp = fHandle[datasetPath]
-		for attribute in ExperimentData.savedAttributes:				
+		for attribute in ExperimentData.savedAttributes:
 			if hasattr(self, attribute):
-				gp.attrs[attribute] = self.__dict__[attribute]	
+				gp.attrs[attribute] = self.__dict__[attribute]
 
 
 
@@ -261,21 +236,14 @@ class ScanData:
 	# Ensure these variables are assigned
 	savedDataset = ['ScanData',
 				 'CalFreq',
-				 'RawTempList',
-				 'CalTempList',
+				 'TempList',
 				 'AndorImage',
-				 'CalImage',
 				 'CMOSImage',
-				 'RawSpecList',
-				 'CalSpecList',
-				 'AndorDisplay',
-				 'LaserPos',
+				 'SpecList',
 				 'MotorCoords',
 				 'Screenshot',
 				 'SD',
-				 'FSR',
-				 'BSList',
-				 'FitSpecList']
+				 'FSR']
 
 	# scanAttribuets and scanSettings are dictionaries
 	# parent is the containing Experiment
@@ -311,27 +279,42 @@ class ScanData:
 			if hasattr(self, data):
 				# first check if file already has this dataset
 				datasetName = datasetPath + data
-				# print('Saving scan: ' + datasetName)
 				if datasetName in fHandle:	# delete if already exist
-					del fHandle[datasetName]
+					pass
+					#del fHandle[datasetName]
 				if hasattr(self.__dict__[data], '__len__') and (not isinstance(self.__dict__[data], str)):
 					#print('Compressing data:' + datasetName)
 					fHandle.create_dataset(datasetName, data=self.__dict__[data], chunks=True, \
 						shuffle=True, compression='lzf')
+					# Once saved to file, delete data from working memory
+					try:
+						self.__dict__[data] = None
+					except:
+						print('[ExperimentData/saveToFile] Could not free memory (1)')
 				else:
 					# print('Not compressing data:' + datasetName)
 					fHandle.create_dataset(datasetName, data=self.__dict__[data])
+					# Once saved to file, delete data from working memory
+					try:
+						self.__dict__[data] = None
+					except:
+						print('[ExperimentData/saveToFile] Could not free memory (2)')
 
 		gp = fHandle[datasetPath]
-		for attribute in ScanData.savedAttributes:				
+		for attribute in ScanData.savedAttributes:
 			if hasattr(self, attribute):
-				gp.attrs[attribute] = self.__dict__[attribute]	
+				gp.attrs[attribute] = self.__dict__[attribute]
 
 		if hasattr(self, 'flattenedParamList'):
 			for item in self.flattenedParamList:
 				if item[1] != None:
 					attrName = 'paramtree/' + item[0]
 					gp.attrs[attrName] = item[1]
+			# Once saved to file, delete data from working memory
+			try:
+				self.__dict__['flattenedParamList'] = None
+			except:
+				print('[ExperimentData/saveToFile] Could not free memory (3)')
 
 
 	# def generateTestData(self, index, fakeArray = None):
