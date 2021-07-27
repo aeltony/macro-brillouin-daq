@@ -21,17 +21,15 @@ class MakoDevice(Devices.BrillouinDevice.Device):
         self.set_up()
         self.mako_lock = app.mako_lock
         self.runMode = 0    #0 is free running, 1 is scan
-        self.camera.ExposureTimeAbs = 5000    # us
-        self.imageHeight = 1000
-        self.imageWidth = 1000
-        self.bin_size = 2
+        self.camera.ExposureTimeAbs = 20000    # us
+        self.imageHeight = 800 #1000
+        self.imageWidth = 800 #1000
+        self.bin_size = 1
         self.camera.Height = self.imageHeight # max: 2048
         self.camera.Width = self.imageWidth # max: 2048
-        self.camera.OffsetX = 524
-        self.camera.OffsetY = 524
+        self.camera.OffsetX = 624 #524
+        self.camera.OffsetY = 624 #524
         self.camera.startCapture()
-        self.camera.runFeatureCommand('AcquisitionStart')
-        self.frame.queueFrameCapture()
 
     # set up default parameters
     def set_up(self):
@@ -51,7 +49,7 @@ class MakoDevice(Devices.BrillouinDevice.Device):
         # for name in cameraFeatureNames:
         #     print('Camera feature:', name)
 
-        self.camera.AcquisitionMode = 'Continuous'
+        self.camera.AcquisitionMode = 'SingleFrame' #'Continuous'
         #print("Frame rate limit: ")
         #print(self.camera.AcquisitionFrameRateLimit)
         #print(self.camera.AcquisitionFrameRateAbs)
@@ -75,14 +73,55 @@ class MakoDevice(Devices.BrillouinDevice.Device):
     # getData() acquires an image from Mako
     def getData(self):
         with self.mako_lock:
-            self.frame.waitFrameCapture(100000)
-            self.frame.queueFrameCapture()
+            self.camera.runFeatureCommand('AcquisitionStart')
+            try:
+                self.frame.waitFrameCapture(100000)
+            except:
+                print('[MakoDevice] Timed out while waiting for new frame')
+                # Stop acquisition + restart
+                self.camera.runFeatureCommand('AcquisitionStop')
+                self.camera.endCapture()
+                self.camera.startCapture()
+                self.camera.runFeatureCommand('AcquisitionStart')
+                # try again
+                try:
+                    self.frame.waitFrameCapture(100000)
+                except:
+                    print('[MakoDevice] Timed out again while waiting for new frame')
+                    image_arr = np.ones(self.frame.height*self.frame.width)
+                    image_arr = image_arr.reshape((self.frame.height//self.bin_size, self.bin_size, \
+                        self.frame.width//self.bin_size, self.bin_size)).max(3).max(1)
+                    self.camera.runFeatureCommand('AcquisitionStop')
+                    return image_arr
+            try:
+                self.frame.queueFrameCapture()
+            except:
+                print('[MakoDevice] Queue frame failed')
+                # Stop acquisition + restart
+                self.camera.runFeatureCommand('AcquisitionStop')
+                self.camera.endCapture()
+                self.camera.revokeAllFrames()
+                time.sleep(.2)
+                self.camera.startCapture()
+                self.camera.runFeatureCommand('AcquisitionStart')
+                # try again
+                try:
+                    self.frame.queueFrameCapture()
+                except:
+                    print('[MakoDevice] Queue frame failed again')
+                    # Stop acquisition and try full camera restart
+                    image_arr = np.ones(self.frame.height*self.frame.width)
+                    image_arr = image_arr.reshape((self.frame.height//self.bin_size, self.bin_size, \
+                        self.frame.width//self.bin_size, self.bin_size)).max(3).max(1)
+                    self.camera.runFeatureCommand('AcquisitionStop')
+                    return image_arr
             imgData = self.frame.getBufferByteData()
             image_arr = np.ndarray(buffer = imgData,
                            dtype = np.uint8,
-                           shape = (self.frame.height,self.frame.width))
+                           shape = (self.frame.height, self.frame.width))
             image_arr = image_arr.reshape((self.frame.height//self.bin_size, self.bin_size, \
                 self.frame.width//self.bin_size, self.bin_size)).max(3).max(1)
+            self.camera.runFeatureCommand('AcquisitionStop')
         # print("[MakoDevice] frame acquired, queue = %d" % self.dataQueue.qsize())
         return image_arr
 
