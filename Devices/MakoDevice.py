@@ -18,9 +18,23 @@ class MakoDevice(Devices.BrillouinDevice.Device):
         self.deviceName = "Mako"
         self.camera = None
         self.vimba = Vimba()
+        self.vimba.startup()
+        system = self.vimba.getSystem()
+        if system.GeVTLIsPresent:
+            system.runFeatureCommand("GeVDiscoveryAllOnce")
+            time.sleep(0.2)
+        camera_ids = self.vimba.getCameraIds()
+        print("[MakoDevice] CMOS camera found: ",camera_ids)
+        self.camera = self.vimba.getCamera(camera_ids[0])
+        self.camera.openCamera()
         self.set_up()
+        self.camera.startCapture()
         self.mako_lock = app.mako_lock
         self.runMode = 0    #0 is free running, 1 is scan
+
+    # set up default parameters
+    def set_up(self):
+        self.camera.AcquisitionMode = 'SingleFrame' #'Continuous'
         self.camera.ExposureTimeAbs = 20000    # us
         self.imageHeight = 800 #1000
         self.imageWidth = 800 #1000
@@ -29,31 +43,6 @@ class MakoDevice(Devices.BrillouinDevice.Device):
         self.camera.Width = self.imageWidth # max: 2048
         self.camera.OffsetX = 624 #524
         self.camera.OffsetY = 624 #524
-        self.camera.startCapture()
-
-    # set up default parameters
-    def set_up(self):
-        self.vimba.startup()
-        system = self.vimba.getSystem()
-
-        if system.GeVTLIsPresent:
-            system.runFeatureCommand("GeVDiscoveryAllOnce")
-            time.sleep(0.2)
-        camera_ids = self.vimba.getCameraIds()
-
-        print("[MakoDevice] CMOS camera found: ",camera_ids)
-        self.camera = self.vimba.getCamera(camera_ids[0])
-        self.camera.openCamera()
-        # list camera features
-        # cameraFeatureNames = self.camera.getFeatureNames()
-        # for name in cameraFeatureNames:
-        #     print('Camera feature:', name)
-
-        self.camera.AcquisitionMode = 'SingleFrame' #'Continuous'
-        #print("Frame rate limit: ")
-        #print(self.camera.AcquisitionFrameRateLimit)
-        #print(self.camera.AcquisitionFrameRateAbs)
-
         self.frame = self.camera.getFrame()
         self.frame.announceFrame()
 
@@ -66,6 +55,8 @@ class MakoDevice(Devices.BrillouinDevice.Device):
             self.camera.runFeatureCommand('AcquisitionStop')
             self.camera.endCapture()
             self.camera.revokeAllFrames()
+            self.camera.flushCaptureQueue()
+            self.camera.closeCamera()
             self.vimba.shutdown()
         except:
             print("[MakoDevice] Not closed properly")
@@ -73,55 +64,22 @@ class MakoDevice(Devices.BrillouinDevice.Device):
     # getData() acquires an image from Mako
     def getData(self):
         with self.mako_lock:
-            self.camera.runFeatureCommand('AcquisitionStart')
-            try:
-                self.frame.waitFrameCapture(100000)
-            except:
-                print('[MakoDevice] Timed out while waiting for new frame')
-                # Stop acquisition + restart
-                self.camera.runFeatureCommand('AcquisitionStop')
-                self.camera.endCapture()
-                self.camera.startCapture()
-                self.camera.runFeatureCommand('AcquisitionStart')
-                # try again
-                try:
-                    self.frame.waitFrameCapture(100000)
-                except:
-                    print('[MakoDevice] Timed out again while waiting for new frame')
-                    image_arr = np.ones(self.frame.height*self.frame.width)
-                    image_arr = image_arr.reshape((self.frame.height//self.bin_size, self.bin_size, \
-                        self.frame.width//self.bin_size, self.bin_size)).max(3).max(1)
-                    self.camera.runFeatureCommand('AcquisitionStop')
-                    return image_arr
             try:
                 self.frame.queueFrameCapture()
             except:
-                print('[MakoDevice] Queue frame failed')
-                # Stop acquisition + restart
-                self.camera.runFeatureCommand('AcquisitionStop')
-                self.camera.endCapture()
-                self.camera.revokeAllFrames()
-                time.sleep(.2)
-                self.camera.startCapture()
-                self.camera.runFeatureCommand('AcquisitionStart')
-                # try again
-                try:
-                    self.frame.queueFrameCapture()
-                except:
-                    print('[MakoDevice] Queue frame failed again')
-                    # Stop acquisition and try full camera restart
-                    image_arr = np.ones(self.frame.height*self.frame.width)
-                    image_arr = image_arr.reshape((self.frame.height//self.bin_size, self.bin_size, \
-                        self.frame.width//self.bin_size, self.bin_size)).max(3).max(1)
-                    self.camera.runFeatureCommand('AcquisitionStop')
-                    return image_arr
+                print('[MakoDevice] Queue frame capture failed')
+            self.camera.runFeatureCommand('AcquisitionStart')
+            self.camera.runFeatureCommand('AcquisitionStop')
+            try:
+                self.frame.waitFrameCapture(10000)
+            except:
+                print('[MakoDevice] Timed out while waiting for new frame')
             imgData = self.frame.getBufferByteData()
             image_arr = np.ndarray(buffer = imgData,
                            dtype = np.uint8,
                            shape = (self.frame.height, self.frame.width))
             image_arr = image_arr.reshape((self.frame.height//self.bin_size, self.bin_size, \
                 self.frame.width//self.bin_size, self.bin_size)).max(3).max(1)
-            self.camera.runFeatureCommand('AcquisitionStop')
         # print("[MakoDevice] frame acquired, queue = %d" % self.dataQueue.qsize())
         return image_arr
 
