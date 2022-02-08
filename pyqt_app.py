@@ -524,6 +524,10 @@ class App(QtGui.QMainWindow,qt_ui.Ui_MainWindow):
         self.calPoints = 0
         self.heatmapPlot.setXRange(0, self.maxRowPoints)
         self.heatmapPlot.setYRange(0, self.maxColPoints)
+        # Return microwave source to previous (non-calibration) set point
+        self.SynthDevice.setFreq(self.allParameters.child('Microwave Source').child('RF Frequency').value())
+        self.SynthDevice.setPower(self.allParameters.child('Microwave Source').child('RF Power').value())
+        time.sleep(0.16)
         if (self.allParameters.child('Scan').child('ToggleReference').value() == True):
             self.ShutterDevice.setShutterState(self.ShutterDevice.REFERENCE_STATE)
             self.AndorDeviceThread.setRefState(True)
