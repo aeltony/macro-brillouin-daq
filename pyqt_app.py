@@ -61,9 +61,12 @@ class App(QtGui.QMainWindow,qt_ui.Ui_MainWindow):
         laserY = self.configParser.getint('More Settings', 'laser_position_y')
         FSR = self.configParser.getfloat('More Settings', 'FSR')
         SD = self.configParser.getfloat('More Settings', 'SD')
-        RFpower = self.configParser.getfloat('Synth', 'RF_power')
         spectColumn = self.configParser.getint('Andor', 'spect_column')
         spectRow = self.configParser.getint('Andor', 'spect_row')
+        RFpower = self.configParser.getfloat('Synth', 'rf_power')
+        countsTarget = self.configParser.getint('Synth', 'counts_target')
+        corrFactor = self.configParser.getfloat('Synth', 'corr_factor')
+
 
         self.params = [
             {'name': 'Scan', 'type': 'group', 'children': [
@@ -100,8 +103,10 @@ class App(QtGui.QMainWindow,qt_ui.Ui_MainWindow):
                 {'name': 'Cal. Freq (min.)', 'type': 'float', 'value': 5.58, 'suffix':' GHz', 'step': 0.01, 'limits': (0.05, 13.0), 'decimals':3},
                 {'name': 'Cal. Freq (max.)', 'type': 'float', 'value': 5.82, 'suffix':' GHz', 'step': 0.01, 'limits': (0.05, 13.0), 'decimals':3},
                 {'name': 'Cal. Freq (step)', 'type': 'float', 'value': 0.08, 'suffix':' GHz', 'step': 0.001, 'limits': (0.001, 13.0), 'decimals':3},
-                {'name': 'RF Power', 'type': 'float', 'value': RFpower, 'suffix':' dBm', 'step': 0.1, 'limits': (-20, 10), 'decimals':2},
-                {'name': 'RF Frequency', 'type': 'float', 'value': 5.75, 'suffix':' GHz', 'step': 0.01, 'limits': (0.05, 13.0), 'decimals':3}
+                {'name': 'RF Power', 'type': 'float', 'value': RFpower, 'suffix':' dBm', 'step': 0.1, 'limits': (-50, 10), 'decimals':2},
+                {'name': 'RF Frequency', 'type': 'float', 'value': 5.5, 'suffix':' GHz', 'step': 0.1, 'limits': (0.05, 13.0), 'decimals':3},
+                {'name': 'Counts Target', 'type': 'int', 'value': countsTarget, 'suffix':' counts', 'step':10000, 'limits':(1, 500000)},
+                {'name': 'Corr. Factor', 'type': 'float', 'value': corrFactor, 'step': 0.1, 'limits': (0.0, 1000.0), 'decimals':3}
             ]},
             {'name': 'More Settings', 'type': 'group', 'children': [
                 {'name': 'Ambient Temp.', 'type': 'float', 'value': 0.0, 'suffix':' deg. C', 'readonly':True, 'decimals':4},
@@ -181,6 +186,14 @@ class App(QtGui.QMainWindow,qt_ui.Ui_MainWindow):
                 arr.append([float(x) for x in row] + [1]) # RGBA, 0.0 to 1.0
         self.heatmapColormapArray = np.array(arr)
         self.colormap = pg.ColorMap(np.linspace(0, 1, len(self.heatmapColormapArray)), self.heatmapColormapArray)
+
+        # Import EOM calibration curve
+        arr = []
+        with open('Utilities\\freq_vs_counts.txt', 'r') as f:
+            reader = csv.reader(f, delimiter='\t')
+            for row in reader:
+                arr.append([float(x) for x in row])
+        self.EOMcalCurve = np.array(arr)
 
         # Data acquisition Heatmap
         self.heatmapScanData = np.array([])
@@ -312,6 +325,8 @@ class App(QtGui.QMainWindow,qt_ui.Ui_MainWindow):
         pItem.child('RF Frequency').setValue(self.SynthDevice.getFreq())
         pItem.child('RF Power').sigValueChanged.connect(self.synthPowerValueChange)
         pItem.child('RF Power').setValue(self.SynthDevice.getPower())
+        pItem.child('Corr. Factor').sigValueChanged.connect(self.synthCorrFactorValueChange)
+        pItem.child('Counts Target').sigValueChanged.connect(self.synthCountsTargetValueChange)
 
         # ========================= Motor =================================
         pItem = self.allParameters.child('Motor')
@@ -420,7 +435,17 @@ class App(QtGui.QMainWindow,qt_ui.Ui_MainWindow):
 
     def synthPowerValueChange(self, param, value):
         self.SynthDevice.setPower(value)
-        self.configParser.set('Synth', 'RF_power', str(value))
+        self.configParser.set('Synth', 'rf_power', str(value))
+        with open(self.configFilename, 'w') as f:
+            self.configParser.write(f)
+
+    def synthCountsTargetValueChange(self, param, value):
+        self.configParser.set('Synth', 'counts_target', str(value))
+        with open(self.configFilename, 'w') as f:
+            self.configParser.write(f)
+
+    def synthCorrFactorValueChange(self, param, value):
+        self.configParser.set('Synth', 'corr_factor', str(value))
         with open(self.configFilename, 'w') as f:
             self.configParser.write(f)
 
@@ -470,9 +495,25 @@ class App(QtGui.QMainWindow,qt_ui.Ui_MainWindow):
             os.makedirs(dataPath)
 
         calFreq = np.arange(self.allParameters.child('Microwave Source').child('Cal. Freq (min.)').value(), \
-            self.allParameters.child('Microwave Source').child('Cal. Freq (max.)').value() + \
+            self.allParameters.child('Microwave Source').child('Cal. Freq (max.)').value() +
             self.allParameters.child('Microwave Source').child('Cal. Freq (step)').value(), \
             self.allParameters.child('Microwave Source').child('Cal. Freq (step)').value())
+
+        # Calculate power/exp. time settings for the calibration frequencies
+        refPower = np.zeros(calFreq.shape) # in dBm
+        refExp = np.zeros(calFreq.shape) # in seconds
+        powerThresh_mW = 1.58 # Above 2 dBm = 1.58 mW higher power drives harmonics
+        for idx, f in enumerate(calFreq):
+            closestIdx = (np.abs(self.EOMcalCurve[:,0] - calFreq[idx])).argmin()
+            power_mW = self.allParameters.child('Microwave Source').child('Counts Target').value()*self.allParameters.child('Microwave Source').child('Corr. Factor').value()/0.1/self.EOMcalCurve[closestIdx,1]
+            if power_mW < powerThresh_mW:
+                refPower[idx] = np.round(10*np.log10(power_mW), 1) # in dBm
+                refExp[idx] = 0.1 # Default ref. exposure is 0.1 s
+            else:
+                refPower[idx] = 2.0 # Above 2 dBm = 1.58 mW higher power drives harmonics
+                refExp[idx] = np.round(self.allParameters.child('Microwave Source').child('Counts Target').value()*self.allParameters.child('Microwave Source').child('Corr. Factor').value()/self.EOMcalCurve[closestIdx,1]/powerThresh_mW, 2)
+                if refExp[idx]>10:
+                    refExp[idx] = 10 # Limit ref. exposure time to 10 s maximum
 
         flattenedParamList = generateParameterList(self.params, self.allParameters)
 
@@ -481,9 +522,10 @@ class App(QtGui.QMainWindow,qt_ui.Ui_MainWindow):
             'step': self.allParameters.child('Scan').child('Step Size').value(),
             'frames': self.allParameters.child('Scan').child('Frame Number').value(),
             'calFreq': calFreq,
+            'refPower': refPower,
+            'refExp': refExp,
             'laserX': self.allParameters.child('More Settings').child('Laser Focus X').value(),
             'laserY': self.allParameters.child('More Settings').child('Laser Focus Y').value(),
-            'refExp': self.allParameters.child('Spectrometer Camera').child('Ref. Exposure').value(),
             'sampleExp': self.allParameters.child('Spectrometer Camera').child('Exposure').value(),
             'flattenedParamList': flattenedParamList }
         self.BrillouinScan.assignScanSettings(scanSettings)
@@ -522,6 +564,7 @@ class App(QtGui.QMainWindow,qt_ui.Ui_MainWindow):
         self.heatmapPlot.setYRange(0, self.maxColPoints)
         # Return microwave source to previous (non-calibration) set point
         self.SynthDevice.setFreq(self.allParameters.child('Microwave Source').child('RF Frequency').value())
+        time.sleep(0.02)
         self.SynthDevice.setPower(self.allParameters.child('Microwave Source').child('RF Power').value())
         time.sleep(0.16)
         if (self.allParameters.child('Scan').child('ToggleReference').value() == True):

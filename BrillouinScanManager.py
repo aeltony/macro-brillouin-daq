@@ -106,6 +106,8 @@ class ScanManager(QtCore.QThread):
 		step = self.scanSettings['step']
 		frames = self.scanSettings['frames']
 		calFreq = self.scanSettings['calFreq']
+		refPower = self.scanSettings['refPower']
+		refExp = self.scanSettings['refExp']
 		motorCoords = np.empty([frames]) # Keep track of actual motor positions
 		calFreqRead = np.empty([calFreq.shape[0]]) # Keep track of actual microwave freq
 
@@ -155,11 +157,15 @@ class ScanManager(QtCore.QThread):
 				screenshot = ImageGrab.grab(bbox=None)
 				# Take calibration data at end of line
 				self.shutter.setShutterState((0, 1)) # switch to reference arm
-				self.sequentialAcqList[0].forceSetExposure(self.scanSettings['refExp'])
+				self.sequentialAcqList[0].forceSetExposure(0.1) # Default ref. exposure is 0.1 s
 				self.sequentialAcqList[0].setRefState(True)
 				for idx, f in enumerate(calFreq):
+					if refExp[idx] != 0.1:
+						self.sequentialAcqList[0].forceSetExposure(refExp[idx])
 					self.synth.setFreq(f)
-					time.sleep(0.01)
+					time.sleep(0.02)
+					self.synth.setPower(refPower[idx])
+					time.sleep(0.16) # Minimum time necessary to set RF power
 					calFreqRead[idx] = self.synth.getFreq()
 					# Signal all devices to start new acquisition
 					for dev in self.sequentialAcqList:
