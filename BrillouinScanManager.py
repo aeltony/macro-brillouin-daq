@@ -2,31 +2,28 @@ import threading
 from PyQt5 import QtGui,QtCore
 from PyQt5.QtCore import pyqtSignal
 import queue as Queue
-from timeit import default_timer as timer   #debugging
 import time
 import numpy as np
+import os
+from PIL import ImageGrab
 from ExperimentData import *
 import DataFitting
 
 # Scans are sequential measurements comprised of one or many different pieces 
-# of hardware. A subset of the data acqusition are taken sequentially while 
+# of hardware. A subset of the data acqusitions are taken sequentially while 
 # others can be free running in their own threads. The ScanManager controls the 
-# sequential data acqusitions and synchronizes with the free running ones using
-# ??? (time tags?). Processing of data from individual instruments are done in 
+# sequential data acqusitions. Processing of data from individual instruments are done in 
 # their corresponding threads asynchronously from both the scan manager and the 
-# data acqusition threads. 
-# The scan manager also synchronizes the processed data
-# from the different processing threads (and does a final processing combining
-# different pieces of data?) and sends a signal to the GUI thread for live update.
+# data acqusition threads.
+# The scan manager also synchronizes the processed data from the different processing
+# threads and combines the different pieces of data.
 
 class ScanManager(QtCore.QThread):
 	motorPosUpdateSig = pyqtSignal(float)
 	clearGUISig = pyqtSignal()
 
-	#TODO: add a pause event
 	def __init__(self, stop_event, motor, shutter, synth):
 		super(ScanManager,self).__init__()
-        # TODO: change to dictionary
 		self.sequentialAcqList = []
 		self.sequentialProcessingList = []
 		self.stop_event = stop_event
@@ -42,7 +39,6 @@ class ScanManager(QtCore.QThread):
 		self.SDcal = np.nan
 		self.FSRcal = np.nan
 
-	# TODO: add a lock for accessing these variables
 	def assignScanSettings(self, settings):
 		self.scanSettings = settings
 
@@ -64,7 +60,7 @@ class ScanManager(QtCore.QThread):
 	def run(self):
 		self.setPriority(QtCore.QThread.TimeCriticalPriority)
 
-		# make sure saving settings are ok
+		# Make sure saving settings are OK
 		if self.sessionData is None:
 			print("No Session provided to save data in; set ScanManager.sessionData first")
 			return
@@ -153,8 +149,11 @@ class ScanManager(QtCore.QThread):
 			if i < frames-1:
 				if step > 0:
 					self.motor.moveRelative(step)
-			# Otherwise, take calibration data
+			# Otherwise, end of line
 			else:
+				# Take a screenshot at end of line
+				screenshot = ImageGrab.grab(bbox=None)
+				# Take calibration data at end of line
 				self.shutter.setShutterState((0, 1)) # switch to reference arm
 				self.sequentialAcqList[0].forceSetExposure(self.scanSettings['refExp'])
 				self.sequentialAcqList[0].setRefState(True)
@@ -207,7 +206,6 @@ class ScanManager(QtCore.QThread):
 		# Free up memory used by dataset
 		del dataset
 		lineScan.MotorCoords = motorCoords
-		lineScan.Screenshot = self.scanSettings['screenshot']
 		lineScan.flattenedParamList = self.scanSettings['flattenedParamList']	#save all GUI paramaters
 
 		# Find SD / FSR of final calibration curve
@@ -222,9 +220,14 @@ class ScanManager(QtCore.QThread):
 		lineScan.SD = self.SDcal
 		lineScan.FSR = self.FSRcal
 
+		# Save data to file
 		self.sessionData.experimentList[self.saveExpIndex].addScan(lineScan)
 		scanIdx = self.sessionData.experimentList[self.saveExpIndex].size() - 1
 		self.sessionData.saveToFile([(self.saveExpIndex,[scanIdx])])
+		# Save screenshot separately as an image file
+		path = os.path.dirname(self.sessionData.filename) + '\\Screenshots\\'
+		name = os.path.splitext(self.sessionData.name)[0]
+		screenshot.save(path + name + '_Exp_%d_Scan_%d.png' %(self.saveExpIndex, scanIdx))
 
 		# finally return to free running settings before the scan started
 		for (dev, devProcessor) in zip(self.sequentialAcqList, self.sequentialProcessingList):
